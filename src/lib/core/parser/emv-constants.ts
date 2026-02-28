@@ -65,16 +65,26 @@ export const EMV_DICTIONARY: {
 };
 
 export const NETWORK_PATTERNS: Record<string, NetworkInfo> = {
-	redeban: { name: 'Redeban', color: '#ef4444' },
+	// Bre-B Colombia (identificadores oficiales Superfinanciera / ACH Colombia)
+	'co.gov.superfinanciera': { name: 'Bre-B', color: '#10b981' },
+	'co.bre-b': { name: 'Bre-B', color: '#10b981' },
 	'bre-b': { name: 'Bre-B', color: '#10b981' },
 	breb: { name: 'Bre-B', color: '#10b981' },
+	'co.gov': { name: 'Bre-B (Gov CO)', color: '#10b981' },
+
+	// Redes colombianas
+	redeban: { name: 'Redeban', color: '#ef4444' },
 	ach: { name: 'ACH Colombia', color: '#3b82f6' },
 	entrecuentas: { name: 'EntreCuentas', color: '#8b5cf6' },
-	visa: { name: 'Visa', color: '#1a1f71' },
-	mastercard: { name: 'Mastercard', color: '#eb001b' },
-	pix: { name: 'PIX', color: '#32bcad' },
 	bancolombia: { name: 'Bancolombia', color: '#fdda24' },
 	daviplata: { name: 'Daviplata', color: '#e60000' },
 	nequi: { name: 'Nequi', color: '#7c0cfa' },
-	movii: { name: 'MOVii', color: '#00b4e0' }
+	movii: { name: 'MOVii', color: '#00b4e0' },
+	'co.com': { name: 'Red Colombia', color: '#3b82f6' },
+
+	// Internacionales
+	visa: { name: 'Visa', color: '#1a1f71' },
+	mastercard: { name: 'Mastercard', color: '#eb001b' },
+	pix: { name: 'PIX', color: '#32bcad' },
+	'br.gov': { name: 'PIX Brasil', color: '#32bcad' }
 };

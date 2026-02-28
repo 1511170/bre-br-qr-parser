@@ -9,6 +9,8 @@ import type {
 } from './types';
 import { EMV_DICTIONARY, NETWORK_PATTERNS } from './emv-constants';
 
+// ─── TLV Core ────────────────────────────────────────────────────────────────
+
 export function parseTLV(data: string): TLVEntry[] {
 	const entries: TLVEntry[] = [];
 	let i = 0;
@@ -19,7 +21,7 @@ export function parseTLV(data: string): TLVEntry[] {
 		const len = parseInt(lenStr, 10);
 
 		if (isNaN(len) || len < 0 || i + 4 + len > data.length) {
-			console.warn(`TLV Parse Warning at offset ${i}: id=${id}, lenStr="${lenStr}"`);
+			console.warn(`[TLV] Break at offset ${i}: id="${id}", lenStr="${lenStr}", data length=${data.length}`);
 			break;
 		}
 
@@ -31,10 +33,80 @@ export function parseTLV(data: string): TLVEntry[] {
 	return entries;
 }
 
+// ─── Pre-processing: extrae EMV de URLs y otros formatos ─────────────────────
+
+/**
+ * Intenta extraer el payload EMVCo puro de un string que puede ser:
+ * - EMV directo: "000201..."
+ * - URL con param: "https://pay.app/qr?payload=000201..."
+ * - Deeplink: "bancolombia://pay?qr=000201..."
+ * - Base64: "MDAwMjAx..."
+ */
+export function extractEMVPayload(raw: string): string {
+	const trimmed = raw.trim();
+
+	// Ya es EMV directo
+	if (trimmed.startsWith('0002')) {
+		return trimmed;
+	}
+
+	// Es una URL o deeplink → buscar el payload EMV en query params
+	try {
+		// Normalizar deeplinks para que URL() los parsee
+		const urlStr = trimmed.includes('://')
+			? trimmed.replace(/^[a-zA-Z][a-zA-Z0-9+\-.]*:\/\//, 'https://')
+			: trimmed;
+
+		const url = new URL(urlStr.startsWith('http') ? urlStr : 'https://x.co?' + urlStr);
+		const params = url.searchParams;
+
+		// Nombres comunes de parámetros EMV en LatAm
+		const candidateParams = [
+			'payload', 'Payload', 'qr', 'QR', 'data', 'Data',
+			'emv', 'EMV', 'p', 'q', 'code', 'qrcode', 'content',
+			'br_code', 'brcode' // PIX Brasil
+		];
+
+		for (const name of candidateParams) {
+			const val = params.get(name);
+			if (val && val.startsWith('0002')) {
+				console.log(`[Parser] EMV extraído del parámetro URL "${name}"`);
+				return decodeURIComponent(val);
+			}
+		}
+
+		// Si ningún param empieza con 0002, buscar en TODOS los params
+		for (const [key, val] of params.entries()) {
+			const decoded = decodeURIComponent(val);
+			if (decoded.startsWith('0002')) {
+				console.log(`[Parser] EMV extraído del parámetro URL "${key}" (fallback)`);
+				return decoded;
+			}
+		}
+	} catch {
+		// No es una URL válida, continúa
+	}
+
+	// Intentar base64 decode
+	try {
+		const decoded = atob(trimmed);
+		if (decoded.startsWith('0002')) {
+			console.log('[Parser] EMV extraído de base64');
+			return decoded;
+		}
+	} catch {
+		// No es base64
+	}
+
+	// Devolver tal cual para que el parseTLV intente lo que pueda
+	return trimmed;
+}
+
+// ─── Network / Key detection ──────────────────────────────────────────────────
+
 export function detectNetwork(globalId: string) {
 	if (!globalId) return null;
 	const id = globalId.toLowerCase();
-
 	for (const [pattern, info] of Object.entries(NETWORK_PATTERNS)) {
 		if (id.includes(pattern)) return info;
 	}
@@ -51,12 +123,19 @@ export function detectKeyType(value: string): KeyInfo['type'] {
 	return 'alias';
 }
 
+// ─── Main parser ──────────────────────────────────────────────────────────────
+
 export function parseEMVQR(rawData: string): ParsedQR {
-	const trimmed = rawData.trim();
-	const entries = parseTLV(trimmed);
+	// 1. Pre-procesar: extraer EMV puro si viene en URL/base64
+	const emvPayload = extractEMVPayload(rawData.trim());
+	console.log('[Parser] Payload EMV a parsear:', emvPayload.slice(0, 80));
+
+	// 2. Parsear TLV
+	const entries = parseTLV(emvPayload);
+	console.log('[Parser] Entradas TLV encontradas:', entries.length, entries.map(e => `${e.id}(${e.len})`).join(' '));
 
 	const result: ParsedQR = {
-		raw: trimmed,
+		raw: rawData.trim(),
 		fields: [],
 		merchantAccounts: [],
 		additionalData: [],
@@ -77,10 +156,16 @@ export function parseEMVQR(rawData: string): ParsedQR {
 		const idNum = parseInt(entry.id, 10);
 
 		// Merchant Account Information (02–51)
-		if (idNum >= 2 && idNum <= 51) {
+		// También acepta IDs no numéricos como fallback mostrándolos como campo genérico
+		if (!isNaN(idNum) && idNum >= 2 && idNum <= 51) {
 			const subEntries = parseTLV(entry.value);
 			const globalId = subEntries.find((s) => s.id === '00')?.value ?? '';
 			const network = detectNetwork(globalId);
+
+			// Detectar Bre-B / Colombia
+			if (/redeban|ach|entrecuentas|bre-?b|superfinanciera|co\.gov|co\.bre/i.test(globalId)) {
+				result.isBreB = true;
+			}
 
 			const account: MerchantAccount = {
 				id: entry.id,
@@ -95,18 +180,19 @@ export function parseEMVQR(rawData: string): ParsedQR {
 							? 'Identificador Global'
 							: s.id === '01'
 								? 'Llave / Destinatario'
-								: `Campo ${s.id}`
+								: s.id === '02'
+									? 'Datos de Acceso'
+									: `Campo ${s.id}`
 				}))
 			};
 
-			// Detectar Bre-B
-			if (/redeban|ach|entrecuentas|bre-?b/i.test(globalId)) {
-				result.isBreB = true;
+			// Si no hay sub-campos parsables, mostrar como campo genérico
+			if (subEntries.length === 0 && entry.value.length > 0) {
+				account.subFields = [{ id: '??', value: entry.value, label: 'Valor raw' }];
 			}
 
-			// Extraer llave del primer sub-campo válido (distinto al global ID)
 			if (!result.keyInfo) {
-				const candidate = subEntries.find((s) => s.id !== '00' && s.value.length > 3);
+				const candidate = subEntries.find((s) => s.id !== '00' && s.value.length > 0);
 				if (candidate) {
 					result.keyInfo = {
 						value: candidate.value,
@@ -129,6 +215,10 @@ export function parseEMVQR(rawData: string): ParsedQR {
 					icon: EMV_DICTIONARY.additional[s.id]?.icon ?? '📎'
 				})
 			);
+			// Si no parsea sub-campos, mostrar el valor raw como un campo
+			if (subEntries.length === 0 && entry.value) {
+				result.additionalData = [{ id: '??', value: entry.value, name: 'Datos Adicionales (raw)', icon: '📎' }];
+			}
 		}
 		// Merchant Information Language Template (64)
 		else if (entry.id === '64') {
@@ -142,7 +232,7 @@ export function parseEMVQR(rawData: string): ParsedQR {
 				})
 			);
 		}
-		// Standard fields
+		// Standard + Unknown fields (todo lo demás)
 		else {
 			const fieldDef = EMV_DICTIONARY.standard[entry.id];
 			const displayValue = fieldDef?.format ? fieldDef.format(entry.value) : entry.value;
@@ -157,31 +247,21 @@ export function parseEMVQR(rawData: string): ParsedQR {
 
 			result.fields.push(field);
 
-			// Extraer metadatos clave
 			switch (entry.id) {
-				case '01':
-					result.isDynamic = entry.value === '12';
-					break;
-				case '54':
-					result.amount = parseFloat(entry.value) || null;
-					break;
-				case '53':
-					result.currency = entry.value;
-					break;
-				case '59':
-					result.merchantName = entry.value;
-					break;
-				case '60':
-					result.merchantCity = entry.value;
-					break;
-				case '58':
-					result.country = entry.value;
-					break;
-				case '63':
-					result.crc = entry.value;
-					break;
+				case '01': result.isDynamic = entry.value === '12'; break;
+				case '54': result.amount = parseFloat(entry.value) || null; break;
+				case '53': result.currency = entry.value; break;
+				case '59': result.merchantName = entry.value; break;
+				case '60': result.merchantCity = entry.value; break;
+				case '58': result.country = entry.value; break;
+				case '63': result.crc = entry.value; break;
 			}
 		}
+	}
+
+	// Si el payload era una URL que no pudo extraerse como EMV, registrar el raw como campo
+	if (entries.length === 0 && emvPayload.length > 0) {
+		console.warn('[Parser] No se pudo parsear TLV. Raw:', emvPayload.slice(0, 100));
 	}
 
 	return result;
