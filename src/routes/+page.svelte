@@ -39,15 +39,29 @@
 			return;
 		}
 
+		console.log('[Page] handleParse, largo:', input.length, 'preview:', input.slice(0, 50));
+
 		try {
 			const result = parseEMVQR(input);
-			const hasContent =
-				result.fields.length > 0 ||
-				result.merchantAccounts.length > 0;
+			console.log('[Page] parseEMVQR result:', {
+				fields: result.fields.length,
+				accounts: result.merchantAccounts.length,
+				merchantName: result.merchantName,
+				isBreB: result.isBreB
+			});
 
-			if (!hasContent) {
-				error = 'Código QR no reconocido o formato no soportado';
+			// Aceptar cualquier resultado que tenga algo parseado, incluso si
+			// no tiene campos estándar (algunos QRs solo tienen cuentas de comercio)
+			const hasAnything =
+				result.fields.length > 0 ||
+				result.merchantAccounts.length > 0 ||
+				result.additionalData.length > 0;
+
+			if (!hasAnything) {
+				console.warn('[Page] QR sin contenido reconocible');
+				error = `QR detectado pero formato no es EMVCo. Contenido: "${input.slice(0, 60)}${input.length > 60 ? '…' : ''}"`;
 				parsed = null;
+				rawInput = input; // dejar visible el raw para inspección
 				return;
 			}
 
@@ -55,20 +69,23 @@
 			rawInput = input;
 			error = null;
 
-			// Add to history (no duplicates)
 			if (!history.find((h) => h.raw === input)) {
 				history = [result, ...history].slice(0, 10);
 			}
 		} catch (e) {
+			console.error('[Page] Error en parseEMVQR:', e);
 			error = `Error al procesar: ${e instanceof Error ? e.message : 'Formato inválido'}`;
+			rawInput = input;
 			parsed = null;
 		}
 	}
 
 	function handleScanResult(data: string) {
+		console.log('[Page] handleScanResult, dato recibido del escáner:', data.slice(0, 80));
 		showScanner = false;
 		rawInput = data;
-		handleParse(data);
+		// Pequeño delay para que la transición del scanner cierre antes de mostrar resultado
+		setTimeout(() => handleParse(data), 100);
 	}
 
 	function handleClear() {
@@ -161,11 +178,19 @@
 		<!-- ── Error ── -->
 		{#if error}
 			<div
-				class="mb-4 p-4 rounded-xl text-sm"
-				style="background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.2); color: #f87171;"
+				class="mb-4 rounded-xl overflow-hidden"
+				style="border: 1px solid rgba(239,68,68,0.25);"
 				transition:slide={{ duration: 200 }}
 			>
-				{error}
+				<div class="p-4" style="background: rgba(239,68,68,0.08);">
+					<p class="text-sm font-medium" style="color: #f87171;">{error}</p>
+				</div>
+				{#if rawInput && !parsed}
+					<div class="p-3 border-t" style="border-color: rgba(239,68,68,0.15); background: rgba(0,0,0,0.3);">
+						<p class="text-[10px] font-bold uppercase tracking-wider mb-1" style="color: #52525b;">Raw escaneado</p>
+						<p class="font-mono text-xs break-all leading-relaxed" style="color: #71717a;">{rawInput}</p>
+					</div>
+				{/if}
 			</div>
 		{/if}
 

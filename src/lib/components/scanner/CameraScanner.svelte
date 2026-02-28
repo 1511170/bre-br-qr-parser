@@ -18,6 +18,7 @@
 	let error = $state<string | null>(null);
 	let scanning = $state(true);
 	let scannerReady = $state(false);
+	let lastDetected = $state<string | null>(null); // debug: último QR detectado
 
 	let intervalId: ReturnType<typeof setInterval> | null = null;
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -35,16 +36,21 @@
 	async function initScanner() {
 		try {
 			if ('BarcodeDetector' in window) {
+				console.log('[Scanner] Usando BarcodeDetector nativo');
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 				detector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
 				await startCamera();
+				// Esperar a que el video tenga frames antes de detectar
+				await waitForVideoReady();
 				startNativeDetection();
 			} else {
-				// jsQR fallback
+				console.log('[Scanner] BarcodeDetector no disponible, usando jsQR');
 				await startCamera();
+				await waitForVideoReady();
 				await startJsQRDetection();
 			}
 		} catch (e) {
+			console.error('[Scanner] Error al inicializar:', e);
 			error = e instanceof Error ? e.message : 'Error accediendo a la cámara';
 		}
 	}
@@ -59,55 +65,91 @@
 				videoEl.srcObject = stream;
 				await videoEl.play();
 				scannerReady = true;
+				console.log('[Scanner] Cámara iniciada, videoWidth:', videoEl.videoWidth);
+			} else {
+				console.warn('[Scanner] videoEl es null al intentar reproducir');
 			}
-		} catch {
+		} catch (e) {
+			console.error('[Scanner] Error accediendo a cámara:', e);
 			throw new Error('No se pudo acceder a la cámara. Verifica los permisos.');
 		}
 	}
 
-	function startNativeDetection() {
-		if (!detector || !videoEl) return;
+	function waitForVideoReady(): Promise<void> {
+		return new Promise((resolve) => {
+			const check = () => {
+				if (videoEl && videoEl.readyState >= 2 && videoEl.videoWidth > 0) {
+					console.log('[Scanner] Video listo:', videoEl.videoWidth, 'x', videoEl.videoHeight);
+					resolve();
+				} else {
+					setTimeout(check, 100);
+				}
+			};
+			check();
+		});
+	}
 
+	function startNativeDetection() {
+		if (!detector || !videoEl) {
+			console.warn('[Scanner] detector o videoEl null, no se puede iniciar detección');
+			return;
+		}
+
+		console.log('[Scanner] Iniciando detección nativa...');
 		intervalId = setInterval(async () => {
 			if (!scanning || !videoEl || videoEl.readyState < 2) return;
 			try {
 				const barcodes = await detector.detect(videoEl);
-				if (barcodes.length > 0 && barcodes[0].rawValue?.length > 10) {
-					handleFound(barcodes[0].rawValue);
+				if (barcodes.length > 0) {
+					const raw = barcodes[0].rawValue ?? '';
+					console.log('[Scanner] QR detectado (nativo):', raw.slice(0, 60) + '...');
+					lastDetected = raw.slice(0, 80);
+					if (raw.length > 0) {
+						handleFound(raw);
+					}
 				}
-			} catch {
-				// Ignorar errores de detección individuales
+			} catch (e) {
+				// Ignorar errores de fotogramas individuales
 			}
 		}, 200);
 	}
 
 	async function startJsQRDetection() {
+		console.log('[Scanner] Cargando jsQR...');
 		const jsQR = (await import('jsqr')).default;
-		if (!videoEl || !canvasEl) return;
+		if (!videoEl || !canvasEl) {
+			console.warn('[Scanner] videoEl o canvasEl null');
+			return;
+		}
 
 		const ctx = canvasEl.getContext('2d', { willReadFrequently: true });
 		if (!ctx) return;
 
+		console.log('[Scanner] Iniciando detección jsQR...');
 		intervalId = setInterval(() => {
 			if (!scanning || !videoEl || videoEl.readyState < 2 || !canvasEl) return;
 
 			canvasEl.width = videoEl.videoWidth;
 			canvasEl.height = videoEl.videoHeight;
-			ctx.drawImage(videoEl, 0, 0);
+			if (canvasEl.width === 0 || canvasEl.height === 0) return;
 
+			ctx.drawImage(videoEl, 0, 0);
 			const imageData = ctx.getImageData(0, 0, canvasEl.width, canvasEl.height);
 			const code = jsQR(imageData.data, imageData.width, imageData.height);
 
-			if (code?.data && code.data.length > 10) {
+			if (code?.data) {
+				console.log('[Scanner] QR detectado (jsQR):', code.data.slice(0, 60) + '...');
+				lastDetected = code.data.slice(0, 80);
 				handleFound(code.data);
 			}
 		}, 200);
 	}
 
 	function handleFound(data: string) {
+		if (!scanning) return; // evitar doble disparo
+		console.log('[Scanner] handleFound, largo del dato:', data.length);
 		scanning = false;
 		cleanup();
-		// Haptic feedback
 		if ('vibrate' in navigator) navigator.vibrate([50, 30, 50]);
 		onResult(data);
 	}
@@ -133,9 +175,7 @@
 	{#if error}
 		<div class="flex-1 flex items-center justify-center p-6">
 			<div class="max-w-xs w-full text-center space-y-4">
-				<div
-					class="w-16 h-16 rounded-2xl bg-red-500/10 flex items-center justify-center mx-auto"
-				>
+				<div class="w-16 h-16 rounded-2xl bg-red-500/10 flex items-center justify-center mx-auto">
 					<CameraOff class="w-8 h-8 text-red-400" />
 				</div>
 				<h3 class="text-lg font-semibold text-white">Error de Cámara</h3>
@@ -201,10 +241,16 @@
 				</div>
 
 				<!-- Texto de guía -->
-				<div class="absolute bottom-28 left-0 right-0 text-center px-8">
+				<div class="absolute bottom-28 left-0 right-0 text-center px-8 space-y-2">
 					<p class="text-white/70 text-sm">
 						{scannerReady ? 'Apunta al código QR Bre-B / EMVCo' : 'Iniciando cámara...'}
 					</p>
+					<!-- Debug: mostrar último QR detectado -->
+					{#if lastDetected}
+						<p class="text-[#10b981] text-xs font-mono break-all px-4">
+							✓ Detectado: {lastDetected}
+						</p>
+					{/if}
 				</div>
 			</div>
 		</div>
