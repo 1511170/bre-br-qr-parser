@@ -2,11 +2,17 @@
 	import { Check, Copy, MapPin, Wallet, Zap } from 'lucide-svelte';
 	import type { ParsedQR } from '$lib/core/parser/types';
 	import { formatCurrency, getCurrencySymbol, getCurrencyCode, formatKey } from '$lib/utils/currency';
-	import { useCopyState } from '$lib/utils/clipboard';
+	import { copyToClipboard } from '$lib/utils/clipboard';
 
 	let { data }: { data: ParsedQR } = $props();
 
-	const copyState = useCopyState();
+	let copiedKey = $state(false);
+
+	async function handleCopy(text: string) {
+		await copyToClipboard(text);
+		copiedKey = true;
+		setTimeout(() => (copiedKey = false), 2000);
+	}
 
 	const currencySymbol = $derived(getCurrencySymbol(data.currency));
 	const currencyCode = $derived(getCurrencyCode(data.currency));
@@ -119,12 +125,12 @@
 				</div>
 
 				<button
-					onclick={() => copyState.copy(data.keyInfo!.value)}
+					onclick={() => handleCopy(data.keyInfo!.value)}
 					class="shrink-0 p-2.5 rounded-xl transition-all active:scale-90"
 					style="background: rgba(255,255,255,0.05); color: #71717a;"
 					aria-label="Copiar llave"
 				>
-					{#if copyState.copied}
+					{#if copiedKey}
 						<Check class="w-4 h-4 text-[#10b981]" />
 					{:else}
 						<Copy class="w-4 h-4" />

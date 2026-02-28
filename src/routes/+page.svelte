@@ -88,6 +88,11 @@
 		setTimeout(() => handleParse(data), 100);
 	}
 
+	function loadSample(data: string) {
+		rawInput = data;
+		handleParse(data);
+	}
+
 	function handleClear() {
 		rawInput = '';
 		parsed = null;
@@ -201,9 +206,10 @@
 					Ejemplos rápidos
 				</p>
 				<div class="flex flex-wrap gap-2">
-					{#each SAMPLES as sample}
+					{#each SAMPLES as sample (sample.name)}
 						<button
-							onclick={() => { rawInput = sample.data; handleParse(sample.data); }}
+							type="button"
+							onclick={() => loadSample(sample.data)}
 							class="px-3 py-1.5 text-xs font-medium rounded-lg transition-all active:scale-95"
 							style="background: #0a0a0f; border: 1px solid rgba(255,255,255,0.07); color: #a1a1aa;"
 						>

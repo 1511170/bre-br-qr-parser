@@ -19,26 +19,3 @@ export async function copyToClipboard(text: string): Promise<boolean> {
 	}
 }
 
-export function useCopyState(resetMs = 2000) {
-	let copied = $state(false);
-	let timer: ReturnType<typeof setTimeout> | null = null;
-
-	async function copy(text: string): Promise<boolean> {
-		const success = await copyToClipboard(text);
-		if (success) {
-			copied = true;
-			if (timer) clearTimeout(timer);
-			timer = setTimeout(() => {
-				copied = false;
-			}, resetMs);
-		}
-		return success;
-	}
-
-	return {
-		get copied() {
-			return copied;
-		},
-		copy
-	};
-}

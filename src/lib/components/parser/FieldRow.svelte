@@ -1,11 +1,17 @@
 <script lang="ts">
 	import { Check, Copy } from 'lucide-svelte';
 	import type { EMVField } from '$lib/core/parser/types';
-	import { useCopyState } from '$lib/utils/clipboard';
+	import { copyToClipboard } from '$lib/utils/clipboard';
 
 	let { field }: { field: EMVField } = $props();
 
-	const copyState = useCopyState();
+	let copied = $state(false);
+
+	async function handleCopy() {
+		await copyToClipboard(field.rawValue);
+		copied = true;
+		setTimeout(() => (copied = false), 2000);
+	}
 </script>
 
 <div
@@ -26,12 +32,12 @@
 	</div>
 
 	<button
-		onclick={() => copyState.copy(field.rawValue)}
+		onclick={handleCopy}
 		class="shrink-0 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-all active:scale-90"
 		style="color: #52525b;"
 		aria-label="Copiar valor"
 	>
-		{#if copyState.copied}
+		{#if copied}
 			<Check class="w-3.5 h-3.5 text-[#10b981]" />
 		{:else}
 			<Copy class="w-3.5 h-3.5" />

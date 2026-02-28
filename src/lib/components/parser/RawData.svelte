@@ -1,12 +1,18 @@
 <script lang="ts">
 	import { Check, Copy, ChevronDown } from 'lucide-svelte';
 	import { slide } from 'svelte/transition';
-	import { useCopyState } from '$lib/utils/clipboard';
+	import { copyToClipboard } from '$lib/utils/clipboard';
 
 	let { raw }: { raw: string } = $props();
 
-	const copyState = useCopyState();
+	let copied = $state(false);
 	let expanded = $state(false);
+
+	async function handleCopy() {
+		await copyToClipboard(raw);
+		copied = true;
+		setTimeout(() => (copied = false), 2000);
+	}
 </script>
 
 <div
@@ -30,12 +36,12 @@
 				<pre
 					class="font-mono text-xs text-[#71717a] break-all whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto">{raw}</pre>
 				<button
-					onclick={() => copyState.copy(raw)}
+					onclick={handleCopy}
 					class="absolute top-0 right-6 p-1.5 rounded-lg transition-all active:scale-90"
 					style="background: rgba(255,255,255,0.05); color: #52525b;"
 					aria-label="Copiar raw"
 				>
-					{#if copyState.copied}
+					{#if copied}
 						<Check class="w-3.5 h-3.5 text-[#10b981]" />
 					{:else}
 						<Copy class="w-3.5 h-3.5" />
